@@ -24,9 +24,9 @@ app.add_middleware(
 async def health_check():
     return {"status": "ok"}
 
-# You can use DEEPGRAM_API_KEY or GEMINI_API_KEY depending on your implementation preference
+# You can use DEEPGRAM_API_KEY or GEMINI_KEY / GEMINI_API_KEY depending on your implementation preference
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_KEY") or os.getenv("GEMINI_API_KEY")
 
 @app.websocket("/ws/transcribe")
 async def transcribe_live(websocket: WebSocket):
@@ -223,7 +223,7 @@ async def transcribe_file(file: UploadFile = File(...)):
                 return {"turns": turns}
                 
         else:
-            return {"error": "Neither GEMINI_API_KEY nor DEEPGRAM_API_KEY are set."}
+            return {"error": "Neither GEMINI_KEY nor DEEPGRAM_API_KEY are set."}
             
     except Exception as e:
         print(f"Transcription Error: {e}")

@@ -17,7 +17,16 @@ app.get('/health', (req, res) => res.json({status: 'ok'}));
 const upload = multer({ dest: 'uploads/' });
 
 // Initialize Gemini
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY, httpOptions: { timeout: 600000 } });
+const geminiApiKey = process.env.GEMINI_KEY || process.env.GEMINI_API_KEY;
+const ai = new GoogleGenAI({ 
+  apiKey: geminiApiKey, 
+  httpOptions: { 
+    timeout: 600000,
+    headers: {
+      'User-Agent': 'aistudio-build',
+    }
+  } 
+});
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY;
 
 // Helper: robust Gemini generation with retry and multi-model fallback
@@ -108,11 +117,23 @@ app.post('/api/analyze', async (req, res) => {
       "caseTitle": string (e.g. "Domestic Disturbance", "Medical Emergency", "Robbery", max 3-4 words summarizing the call),
       "riskScore": number (0-100),
       "signals": [] (short list of danger signals detected, e.g., [{"category": "WEAPON", "keyword": "knife", "description": "Weapon mentioned"}]),
+      "emotionalFactors": string[] (e.g., ["Fear", "Trauma", "Panic", "Anxiety", "Calmness"] detected from the context),
       "recommendedActions": string[] (e.g., ["Dispatch Police", "Mark Critical"]),
       "suggestedQuestions": string[] (e.g., ["Are you in a safe room?"]),
       "callerStatus": string (e.g., "In Danger", "Distressed"),
       "locationStatus": string ("unknown", "approximate", "known"),
       "extractedLocation": string | null (exact address or description of the location mentioned in the call. IMPORTANT: MUST be translated to English if spoken in a foreign language. e.g. "247 Mineral Falls Avenue"),
+      "location_estimate": {
+        "confidence": "unknown" | "insufficient" | "low" | "medium" | "high",
+        "confidenceScore": number (0-100),
+        "latitude": number | null (estimated latitude based on the extractedLocation),
+        "longitude": number | null (estimated longitude based on the extractedLocation),
+        "radiusMeters": number (estimated accuracy radius),
+        "label": string (human readable label for the location),
+        "source": string (e.g. "Derived from caller-provided location clues"),
+        "isVerified": false,
+        "evidence": string[] (array of caller quotes relating to the location)
+      } (Provide this object ONLY if a location clue is detected, otherwise output null),
       "detectedLanguage": string | null (name of the primary language being spoken by the caller, e.g. "Hindi", "Marathi", "English"),
       "translations": { 
          "0": "English translation for [Turn 0] if not English",
@@ -129,7 +150,7 @@ app.post('/api/analyze', async (req, res) => {
     `;
 
     let parsedReport = {
-      riskScore: 0, signals: [], recommendedActions: [], suggestedQuestions: [], callerStatus: 'Unknown', locationStatus: 'Unknown', extractedLocation: null, detectedLanguage: null, translations: {}, correctedOriginals: {}
+      riskScore: 0, signals: [], emotionalFactors: [], recommendedActions: [], suggestedQuestions: [], callerStatus: 'Unknown', locationStatus: 'Unknown', extractedLocation: null, detectedLanguage: null, translations: {}, correctedOriginals: {}
     };
 
     try {
@@ -167,6 +188,61 @@ app.post('/api/analyze', async (req, res) => {
 });
 
 // -------------------------------------------------------------
+// REST Endpoint: Translate Entire Transcript
+// -------------------------------------------------------------
+app.post('/api/translate', async (req, res) => {
+  try {
+    const { turns } = req.body;
+    if (!turns || turns.length === 0) {
+      return res.json({ translations: {} });
+    }
+
+    const transcriptText = turns.map((t: any, i: number) => `[Turn ${i}] ${t.speaker}: ${t.text}`).join('\n');
+    const prompt = `
+    You are an expert emergency services translator. 
+    Translate the following transcript into English. 
+    Maintain the precise context, urgency, and meaning of the call.
+    Return a strict JSON object where the keys are the turn indices and the values are the English translations.
+    If a turn is already in English, output the original English text as the translation.
+    Format:
+    {
+       "translations": {
+         "0": "English text here",
+         "1": "..."
+       }
+    }
+
+    Transcript:
+    ${transcriptText}
+    `;
+
+    const response = await generateContentWithFallback({
+      models: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash'],
+      contents: prompt,
+      config: { responseMimeType: "application/json" }
+    });
+
+    let fullOutput = response.text || "{}";
+    let parsed = { translations: {} };
+    const jsonMatch = fullOutput.match(/```json\s*([\s\S]*?)\s*```/) || fullOutput.match(/([\{\[][\s\S]*[\}\]])/);
+    if (jsonMatch) {
+      try {
+        parsed = JSON.parse(jsonMatch[1]);
+      } catch (err) {}
+    } else {
+      try {
+        parsed = JSON.parse(fullOutput);
+      } catch (err) {}
+    }
+
+    res.json(parsed);
+  } catch (error: any) {
+    console.error('Translation Endpoint Error:', error.message || error);
+    res.status(500).json({ error: error.message || 'Failed to translate transcript' });
+  }
+});
+
+// -------------------------------------------------------------
 // REST Endpoint: File Upload Transcription (Using Gemini 1.5 Pro)
 // -------------------------------------------------------------
 app.post('/api/transcribe_file', upload.single('file'), async (req, res) => {
@@ -189,7 +265,7 @@ app.post('/api/transcribe_file', upload.single('file'), async (req, res) => {
   try {
     filePath = file.path;
 
-    if (process.env.GEMINI_API_KEY) {
+    if (process.env.GEMINI_KEY || process.env.GEMINI_API_KEY) {
       console.log("Transcribing via Gemini (Inline Base64)...");
       
       const fileBuffer = fs.readFileSync(file.path);
@@ -279,7 +355,7 @@ app.post('/api/transcribe_file', upload.single('file'), async (req, res) => {
       return res.end();
     } else {
       clearInterval(heartbeat);
-      res.write(JSON.stringify({ error: "GEMINI_API_KEY is not set." }));
+      res.write(JSON.stringify({ error: "GEMINI_KEY is not set." }));
       return res.end();
     }
   } catch (error: any) {
@@ -351,7 +427,11 @@ async function startServer() {
       console.error("Error parsing WS URL:", e);
     }
 
+    
     let dgWs: WebSocket | null = null;
+    let dgWsReady = false;
+    let messageBuffer: any[] = [];
+
 
     if (!DEEPGRAM_API_KEY) {
       console.log("WARNING: DEEPGRAM_API_KEY not set. Sending mock data.");
@@ -370,12 +450,7 @@ async function startServer() {
     }
 
     try {
-      let dgUrl = '';
-      if (targetLanguage === 'en' || targetLanguage === 'en-US' || targetLanguage === 'multi') {
-        dgUrl = `wss://api.deepgram.com/v1/listen?model=nova-3&language=${targetLanguage}&smart_format=true&diarize=true&interim_results=true&endpointing=300&encoding=linear16&sample_rate=16000`;
-      } else {
-        dgUrl = `wss://api.deepgram.com/v1/listen?model=general&tier=nova-3&language=${targetLanguage}&smart_format=true&diarize=true&interim_results=true&endpointing=300&encoding=linear16&sample_rate=16000`;
-      }
+      let dgUrl = `wss://api.deepgram.com/v1/listen?model=nova-3&language=${targetLanguage}&smart_format=true&diarize=true&interim_results=true&endpointing=300`;
       console.log("Connecting to Deepgram with URL:", dgUrl);
       dgWs = new WebSocket(dgUrl, {
         headers: {
@@ -383,9 +458,15 @@ async function startServer() {
         }
       });
 
+      
       dgWs.on('open', () => {
         console.log("Connected to Deepgram");
+        dgWsReady = true;
+        while (messageBuffer.length > 0) {
+          dgWs!.send(messageBuffer.shift());
+        }
       });
+
 
       dgWs.on('message', (data: any) => {
         try {
@@ -395,7 +476,7 @@ async function startServer() {
             const words = alts.words || [];
             const is_final = msg.is_final || false;
 
-            const turns: any[] = [];
+            console.log("DEEPGRAM SENT A MESSAGE!"); const turns: any[] = [];
             let current_turn: any = null;
 
             for (const w of words) {
@@ -418,6 +499,19 @@ async function startServer() {
             }
             if (current_turn) turns.push(current_turn);
 
+            if (turns.length === 0 && alts.transcript) {
+              turns.push({
+                speaker: "Unknown",
+                start: msg.start || 0,
+                end: (msg.start || 0) + (msg.duration || 1),
+                text: alts.transcript,
+                isFinal: is_final,
+                language: 'Live'
+              });
+            } else {
+              turns.forEach(t => t.language = 'Live');
+            }
+
             if (turns.length > 0) {
               ws.send(JSON.stringify({ turns }));
             }
@@ -434,11 +528,15 @@ async function startServer() {
       console.error("Failed to connect to Deepgram", err);
     }
 
+    
     ws.on('message', (message) => {
-      if (dgWs && dgWs.readyState === WebSocket.OPEN) {
+      if (dgWsReady && dgWs && dgWs.readyState === WebSocket.OPEN) {
         dgWs.send(message);
+      } else {
+        messageBuffer.push(message);
       }
     });
+
 
     ws.on('close', () => {
       console.log("Client disconnected");

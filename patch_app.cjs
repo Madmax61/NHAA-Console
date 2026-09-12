@@ -1,46 +1,78 @@
 const fs = require('fs');
-let content = fs.readFileSync('src/App.tsx', 'utf8');
+let code = fs.readFileSync('src/App.tsx', 'utf8');
 
-content = content.replace(/translations: \{\}/g, "translations: {}, correctedOriginals: {}");
+// Patch 1: Add onVerify handler to LocationConfidenceMap usage
+const oldMap = '<LocationConfidenceMap analysis={analysis} />';
+const newMap = `<LocationConfidenceMap analysis={analysis} onVerify={(est) => {
+                const timeStr = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                const logStr = \`Location verified: \${est.label || 'Unknown'} (\${est.latitude}, \${est.longitude})\`;
+                const newLog = {
+                  id: Date.now() + Math.random(),
+                  speaker: 'SYS',
+                  start: 0,
+                  end: 0,
+                  timestamp: timeStr,
+                  text: '*Operator verified location*',
+                  isFinal: true,
+                  isNote: true,
+                  fullNote: logStr
+                };
+                updateCase(currentCase.id, {
+                  turns: [...(currentCase.turns || []), newLog],
+                  auditLog: [...(currentCase.auditLog || []), \`Location manually verified at \${timeStr}\`]
+                });
+              }} />`;
+code = code.replace(oldMap, newMap);
 
-// Also update where the original text is rendered
-const oldRender = `{(isFinal && analysis.translations && analysis.translations[idx.toString()]) ? (
-                      <>
-                        <span>{renderTextWithHighlights(analysis.translations[idx.toString()], riskSignals)}</span>
-                        <span className="text-[10px] text-[var(--text-secondary)]/70 italic">
-                          {turn.text}
-                        </span>
-                      </>
-                    ) : (
-                      <span className={!isFinal ? "opacity-70" : ""}>
-                        {renderTextWithHighlights(turn.text, riskSignals)}
-                        {(isFinal && analysisUnavailable) && (
-                          <span className="ml-2 text-[10px] text-[var(--critical)] opacity-70 italic border border-[var(--critical)] px-1">Translation Failed</span>
-                        )}
-                      </span>
-                    )}`;
+// Patch 2: Diarization fix for live audio
+const oldDiarization = `            const lastTurn = nextTurns[nextTurns.length - 1];
+            if (lastTurn && !lastTurn.isFinal) {
+              // Update the ongoing turn
+              if (lastTurn.text !== inc.text) {
+                lastTurn.text = inc.text;
+                updated = true;
+              }
+              if (inc.isFinal) {
+                lastTurn.isFinal = true;
+                updated = true;
+                finalAdded = true;
+              }
+            } else {
+              // Create a new turn`;
 
-const newRender = `{(isFinal && analysis.translations && analysis.translations[idx.toString()]) ? (
-                      <>
-                        <span>{renderTextWithHighlights(analysis.translations[idx.toString()], riskSignals)}</span>
-                        <span className="text-[10px] text-[var(--text-secondary)]/70 italic">
-                          {(analysis.correctedOriginals && analysis.correctedOriginals[idx.toString()]) ? analysis.correctedOriginals[idx.toString()] : turn.text}
-                        </span>
-                      </>
-                    ) : (
-                      <span className={!isFinal ? "opacity-70" : ""}>
-                        {renderTextWithHighlights((analysis.correctedOriginals && analysis.correctedOriginals[idx.toString()]) ? analysis.correctedOriginals[idx.toString()] : turn.text, riskSignals)}
-                        {(isFinal && analysisUnavailable) && (
-                          <span className="ml-2 text-[10px] text-[var(--critical)] opacity-70 italic border border-[var(--critical)] px-1">Translation Failed</span>
-                        )}
-                      </span>
-                    )}`;
+const newDiarization = `            const lastTurn = nextTurns[nextTurns.length - 1];
+            if (lastTurn && !lastTurn.isFinal) {
+              // Diarization fix: if speaker changes during an ongoing turn, force finalize it and start a new one
+              if (inc.speaker && lastTurn.speaker !== 'Unknown' && lastTurn.speaker !== inc.speaker) {
+                 lastTurn.isFinal = true;
+                 nextTurns.push({
+                   id: Date.now() + Math.random(),
+                   speaker: inc.speaker,
+                   start: lastTurn.end + 0.1,
+                   end: lastTurn.end + 2.0,
+                   timestamp: inc.timestamp || lastTurn.timestamp,
+                   text: inc.text,
+                   isFinal: inc.isFinal || false
+                 });
+                 updated = true;
+                 if (inc.isFinal) finalAdded = true;
+              } else {
+                 // Update the ongoing turn
+                 if (inc.speaker && lastTurn.speaker === 'Unknown') lastTurn.speaker = inc.speaker;
+                 if (lastTurn.text !== inc.text) {
+                   lastTurn.text = inc.text;
+                   updated = true;
+                 }
+                 if (inc.isFinal) {
+                   lastTurn.isFinal = true;
+                   updated = true;
+                   finalAdded = true;
+                 }
+              }
+            } else {
+              // Create a new turn`;
 
-if (content.includes("{(isFinal && analysis.translations && analysis.translations[idx.toString()]) ? (")) {
-    content = content.replace(oldRender, newRender);
-    fs.writeFileSync('src/App.tsx', content);
-    console.log("App.tsx patched successfully.");
-} else {
-    console.log("Could not find the render block to replace.");
-}
+code = code.replace(oldDiarization, newDiarization);
 
+fs.writeFileSync('src/App.tsx', code);
+console.log('Patched App.tsx');

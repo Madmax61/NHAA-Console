@@ -1,21 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import WaveSurfer from 'wavesurfer.js';
-
-type LocationConfidence = "unknown" | "insufficient" | "low" | "medium" | "high" | "verified";
-
-type LocationEstimate = {
-  confidence: LocationConfidence;
-  confidenceScore: number;
-  label?: string;
-  latitude?: number;
-  longitude?: number;
-  radiusMeters?: number;
-  source?: string;
-  isVerified?: boolean;
-  evidence?: string[];
-};
-
-import { LocationConfidenceMap } from './LocationConfidenceMap';
 import { Play, Pause,
   Trash2,
   Plus,
@@ -38,10 +22,7 @@ Shield,
   Square,
   CheckCircle,
   XCircle,
-  ChevronDown,
-  Info,
-  Download,
-  Globe
+  ChevronDown
 } from 'lucide-react';
 
 
@@ -384,90 +365,6 @@ function ActiveCallView({ currentCase, updateCase, updateCaseId }: { currentCase
   const [rawError, setRawError] = useState<string | null>(null);
   const [analysisUnavailable, setAnalysisUnavailable] = useState(false);
   const [sourceLanguage, setSourceLanguage] = useState<string>('auto');
-
-  const [operatorNote, setOperatorNote] = useState('');
-  const [showSviDetails, setShowSviDetails] = useState(false);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [clickedActions, setClickedActions] = useState<Record<string, boolean>>({});
-  const [isTranslating, setIsTranslating] = useState(false);
-
-  const translateEntireTranscript = async () => {
-    if (turns.length === 0) return;
-    setIsTranslating(true);
-    try {
-      const res = await fetch('/api/translate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ turns })
-      });
-      const data = await res.json();
-      if (data && data.translations) {
-        setAnalysis((prev: any) => ({
-          ...prev,
-          translations: { ...(prev?.translations || {}), ...data.translations }
-        }));
-      }
-    } catch (e) {
-      console.error("Translation failed", e);
-    } finally {
-      setIsTranslating(false);
-    }
-  };
-
-  const handleRecommendedAction = (action: string) => {
-    setClickedActions(prev => ({ ...prev, [action]: true }));
-    setToastMessage(`Action Taken: ${action}`);
-    setTimeout(() => setToastMessage(null), 3000);
-    
-    if (currentCase) {
-      const newLog = {
-        time: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute:'2-digit', second:'2-digit' }),
-        type: 'alert',
-        actor: 'OP-01',
-        message: `Recommended Action Taken: ${action}`
-      };
-      updateCase(currentCase.id, {
-        auditLog: [...(currentCase.auditLog || []), newLog]
-      });
-    }
-  };
-
-  const handleOperatorNoteSubmit = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      if (!operatorNote.trim() || !currentCase) return;
-      
-      const timeStr = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute:'2-digit', second:'2-digit' });
-      
-      const newLog = {
-        time: timeStr,
-        type: 'operator',
-        actor: 'OP-01',
-        message: `Note: ${operatorNote.trim()}`
-      };
-      
-      const newTurn = {
-        id: Date.now() + Math.random(),
-        speaker: 'SYSTEM',
-        start: 0,
-        end: 0,
-        timestamp: timeStr,
-        text: '*Operator added a note*',
-        isFinal: true,
-        isNote: true,
-        fullNote: operatorNote.trim()
-      };
-      
-      updateCase(currentCase.id, {
-        auditLog: [...(currentCase.auditLog || []), newLog],
-        turns: [...(currentCase.turns || []), newTurn]
-      });
-      
-      setTurns(prev => [...prev, newTurn]);
-      setOperatorNote('');
-    }
-  };
-
   
   // Re-connect WebSocket if language changes while streaming
   useEffect(() => {
@@ -808,32 +705,15 @@ function ActiveCallView({ currentCase, updateCase, updateCaseId }: { currentCase
           if (inc.language === 'Live' || inc.start === 0.0) {
             const lastTurn = nextTurns[nextTurns.length - 1];
             if (lastTurn && !lastTurn.isFinal) {
-              // Diarization fix: if speaker changes during an ongoing turn, force finalize it and start a new one
-              if (inc.speaker && lastTurn.speaker !== 'Unknown' && lastTurn.speaker !== inc.speaker) {
-                 lastTurn.isFinal = true;
-                 nextTurns.push({
-                   id: Date.now() + Math.random(),
-                   speaker: inc.speaker,
-                   start: lastTurn.end + 0.1,
-                   end: lastTurn.end + 2.0,
-                   timestamp: inc.timestamp || lastTurn.timestamp,
-                   text: inc.text,
-                   isFinal: inc.isFinal || false
-                 });
-                 updated = true;
-                 if (inc.isFinal) finalAdded = true;
-              } else {
-                 // Update the ongoing turn
-                 if (inc.speaker && lastTurn.speaker === 'Unknown') lastTurn.speaker = inc.speaker;
-                 if (lastTurn.text !== inc.text) {
-                   lastTurn.text = inc.text;
-                   updated = true;
-                 }
-                 if (inc.isFinal) {
-                   lastTurn.isFinal = true;
-                   updated = true;
-                   finalAdded = true;
-                 }
+              // Update the ongoing turn
+              if (lastTurn.text !== inc.text) {
+                lastTurn.text = inc.text;
+                updated = true;
+              }
+              if (inc.isFinal) {
+                lastTurn.isFinal = true;
+                updated = true;
+                finalAdded = true;
               }
             } else {
               // Create a new turn
@@ -1131,9 +1011,6 @@ function ActiveCallView({ currentCase, updateCase, updateCaseId }: { currentCase
                   <span className="text-[10px] text-[var(--info-tag)] uppercase">STATUS: {analysis.locationStatus || 'unknown'}</span>
                 </div>
               </div>
-              
-              <LocationConfidenceMap analysis={analysis} />
-
             </div>
             {micError && (
               <div className="mt-4 p-3 border border-[var(--critical)] bg-[var(--critical)]/10 text-[var(--critical)] text-xs">
@@ -1195,14 +1072,6 @@ function ActiveCallView({ currentCase, updateCase, updateCaseId }: { currentCase
                   </div>
                 )}
                 <button 
-                  onClick={translateEntireTranscript}
-                  disabled={turns.length === 0 || isTranslating}
-                  className="flex items-center gap-1 px-2 py-1 text-xs font-bold border transition-colors bg-[var(--bg-panel)] text-[var(--text-primary)] border-[var(--border)] hover:bg-[var(--border)] disabled:opacity-50"
-                >
-                  <Globe className="w-3 h-3" />
-                  {isTranslating ? 'TRANSLATING...' : 'TRANSLATE'}
-                </button>
-                <button 
                   onClick={swapAllSpeakers}
                   disabled={turns.length === 0}
                   className="flex items-center gap-1 px-2 py-1 text-xs font-bold border transition-colors bg-[var(--bg-panel)] text-[var(--text-primary)] border-[var(--border)] hover:bg-[var(--border)] disabled:opacity-50"
@@ -1251,9 +1120,7 @@ function ActiveCallView({ currentCase, updateCase, updateCaseId }: { currentCase
                   </span>
                   <div className="flex flex-col gap-1">
                     {/* Display Translation if available, otherwise Original */}
-                    {turn.isNote ? (
-                       <span className="italic opacity-80 text-[var(--info-tag)] font-sans">{turn.text}</span>
-                    ) : (isFinal && analysis.translations && analysis.translations[idx.toString()]) ? (
+                    {(isFinal && analysis.translations && analysis.translations[idx.toString()]) ? (
                       <>
                         <span>{renderTextWithHighlights(
                           typeof analysis.translations[idx.toString()] === 'string' 
@@ -1320,11 +1187,8 @@ function ActiveCallView({ currentCase, updateCase, updateCaseId }: { currentCase
             {/* Operator Notes */}
             <div className="p-2 pt-0 shrink-0">
               <textarea 
-                value={operatorNote}
-                onChange={(e) => setOperatorNote(e.target.value)}
-                onKeyDown={handleOperatorNoteSubmit}
                 className="w-full h-16 bg-[var(--bg-main)] border border-[var(--border)] p-2 text-xs font-mono text-[var(--text-primary)] focus:outline-none focus:border-[var(--info-tag)] resize-none"
-                placeholder="Enter operator notes here... (Press Enter to submit, Shift+Enter for new line)"
+                placeholder="Enter operator notes here... (Time-stamped on submit)"
               ></textarea>
             </div>
           </div>
@@ -1345,34 +1209,6 @@ function ActiveCallView({ currentCase, updateCase, updateCaseId }: { currentCase
                 <div className="h-2 w-full bg-[var(--bg-panel)] border border-[var(--border)]">
                   <div className={`h-full ${riskScore >= 90 ? 'bg-[var(--critical)]' : riskScore >= 50 ? 'bg-[var(--high)]' : 'bg-[var(--info-tag)]'}`} style={{ width: `${riskScore}%` }}></div>
                 </div>
-                <div className="pt-2 flex justify-end">
-                   <button onClick={() => setShowSviDetails(!showSviDetails)} className="flex items-center gap-1 text-[10px] uppercase text-[var(--info-tag)] hover:underline">
-                      <Info className="w-3 h-3" /> How is this calculated?
-                   </button>
-                </div>
-                {showSviDetails && (
-                   <div className="mt-2 p-2 bg-[#1A2634] border border-[var(--border)] text-[10px] space-y-2 relative">
-                      <button onClick={() => setShowSviDetails(false)} className="absolute top-1 right-1 text-[var(--text-secondary)] hover:text-white"><XCircle className="w-3 h-3" /></button>
-                      <div className="font-bold text-[var(--text-primary)] uppercase border-b border-[var(--border)] pb-1 mb-1">SVI Calculation Factors</div>
-                      <div>
-                         <span className="text-[var(--text-secondary)]">Detected Risk Signals:</span>
-                         <ul className="list-disc pl-4 mt-1 text-[var(--high)]">
-                           {riskSignals && riskSignals.length > 0 ? riskSignals.map((s: any, i: number) => (
-                              <li key={i}>{typeof s === 'string' ? s : s.category || s.keyword}</li>
-                           )) : <li>None</li>}
-                         </ul>
-                      </div>
-                      <div>
-                         <span className="text-[var(--text-secondary)]">Emotional Factors (Contextual):</span>
-                         <div className="flex flex-wrap gap-1 mt-1">
-                           {analysis.emotionalFactors && analysis.emotionalFactors.length > 0 ? analysis.emotionalFactors.map((ef: string, i: number) => (
-                              <span key={i} className="px-1.5 py-0.5 bg-[var(--bg-panel)] border border-[var(--border)] rounded-sm text-[var(--text-primary)]">{ef}</span>
-                           )) : <span className="italic text-[var(--text-secondary)]">Analyzing...</span>}
-                         </div>
-                      </div>
-                   </div>
-                )}
-
              </div>
           </div>
           {/* Risk Signals */}
@@ -1422,13 +1258,8 @@ function ActiveCallView({ currentCase, updateCase, updateCaseId }: { currentCase
                <div className="p-2 bg-[var(--bg-main)] grid grid-cols-1 gap-2">
                  {recommendedActions.length > 0 ? (
                    recommendedActions.map((action: string, i: number) => (
-                     <button key={i} onClick={() => handleRecommendedAction(action)} className={`w-full p-2 font-bold text-xs uppercase border transition-all duration-300 flex items-center justify-center gap-2 ${
-                        clickedActions[action] 
-                          ? 'bg-[var(--info-tag)] text-black border-[var(--info-tag)] opacity-80' 
-                          : (action.includes('Critical') || action.includes('Dispatch') ? 'bg-[var(--critical)] text-[var(--bg-main)] border-[var(--critical)] hover:opacity-90' : 'bg-[var(--bg-panel)] text-[var(--text-primary)] border-[var(--border)] hover:bg-[var(--border)] hover:opacity-90')
-                      }`}>
-                       {clickedActions[action] && <CheckCircle className="w-4 h-4 animate-bounce" />}
-                       {clickedActions[action] ? 'Action Completed' : action}
+                     <button key={i} className={`w-full p-2 font-bold text-xs uppercase border hover:opacity-90 ${action.includes('Critical') || action.includes('Dispatch') ? 'bg-[var(--critical)] text-[var(--bg-main)] border-[var(--critical)]' : 'bg-[var(--bg-panel)] text-[var(--text-primary)] border-[var(--border)] hover:bg-[var(--border)]'}`}>
+                       {action}
                      </button>
                    ))
                  ) : (
@@ -1487,7 +1318,7 @@ function EvidenceAuditView({ currentCase, updateCase }: { currentCase: any, upda
         <div className="flex gap-2">
           <button onClick={() => {
              if (!currentCase.turns) return;
-             const text = currentCase.turns.map((t: any) => `[${t.speaker || 'Unknown'}] ${t.isNote ? t.fullNote : t.text}`).join('\n');
+             const text = currentCase.turns.map((t: any) => `[${t.speaker || 'Unknown'}] ${t.text}`).join('');
              const blob = new Blob([text], { type: 'text/plain' });
              const url = URL.createObjectURL(blob);
              const a = document.createElement('a');
@@ -1510,15 +1341,8 @@ function EvidenceAuditView({ currentCase, updateCase }: { currentCase: any, upda
         <div className="w-1/2 flex flex-col gap-4">
           
           <div className="border border-[var(--border)] bg-[var(--bg-main)] p-4 flex flex-col gap-4">
-            <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <Volume2 className="w-4 h-4" /> Original Audio Recording
-              </div>
-              {currentCase.audioUrl && (
-                <a href={currentCase.audioUrl} download={`case-${currentCase.id}-audio.wav`} className="text-[var(--info-tag)] hover:text-[var(--text-primary)] flex items-center gap-1 transition-colors">
-                  <Download className="w-3 h-3" /> DOWNLOAD
-                </a>
-              )}
+            <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase flex items-center gap-2">
+              <Volume2 className="w-4 h-4" /> Original Audio Recording
             </h3>
             
             {/* Audio Player or Waveform */}

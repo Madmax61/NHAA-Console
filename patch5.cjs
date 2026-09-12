@@ -6,4 +6,3 @@ const newExport = `const text = currentCase.turns.map((t: any) => \`[\${t.speake
 
 app = app.replace(oldExport, newExport);
 fs.writeFileSync('src/App.tsx', app);
-console.log('Patched Export');
