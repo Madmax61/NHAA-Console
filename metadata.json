@@ -1,0 +1,10 @@
+{
+  "name": "Remix NHAA 14566 CAD Console",
+  "description": "AI-Assisted Emergency Helpline Operator Console for NHAA 14566",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

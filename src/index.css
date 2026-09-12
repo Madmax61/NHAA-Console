@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+:root {
+  --bg-main: #12212E;
+  --bg-panel: #1B2D3D;
+  --border: #2E4457;
+  --text-primary: #E8EEF3;
+  --text-secondary: #9FB3C4;
+  --critical: #E4572E;
+  --high: #E0A82E;
+  --pending: #3E92CC;
+  --resolved: #4C9A6B;
+  --info-tag: #4FB8B0;
+}
+
+body {
+  background-color: var(--bg-main);
+  color: var(--text-primary);
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  margin: 0;
+  overflow: hidden; /* Force app-like behavior */
+}
+
+/* Scrollbar styling for that dense CAD look */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-main);
+  border-left: 1px solid var(--border);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
