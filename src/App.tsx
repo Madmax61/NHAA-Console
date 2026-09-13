@@ -234,14 +234,6 @@ export default function App() {
             <Server className="w-3.5 h-3.5" />
             <span>Sys: ONLINE</span>
           </div>
-          <div className="flex items-center gap-1.5">
-            <Database className="w-3.5 h-3.5" />
-            <span>DB: SYNCED</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <Activity className="w-3.5 h-3.5 text-[var(--resolved)]" />
-            <span>LATENCY: 42ms</span>
-          </div>
         </div>
         <div className="italic text-[var(--info-tag)]">
           "AI suggestions support — not replace — operator judgment."
@@ -802,54 +794,33 @@ function ActiveCallView({ currentCase, updateCase, updateCaseId }: { currentCase
         let finalAdded = false;
         const nextTurns = prevTurns.map(t => ({...t}));
 
-        incomingTurns.forEach((inc: any) => {
-          // If this is a live transcription stream, the backend might always send start=0.0
-          // We should append to the last turn if it's not final, or create a new turn if it is final.
-          if (inc.language === 'Live' || inc.start === 0.0) {
-            const lastTurn = nextTurns[nextTurns.length - 1];
-            if (lastTurn && !lastTurn.isFinal) {
-              // Diarization fix: if speaker changes during an ongoing turn, force finalize it and start a new one
-              if (inc.speaker && lastTurn.speaker !== 'Unknown' && lastTurn.speaker !== inc.speaker) {
-                 lastTurn.isFinal = true;
-                 nextTurns.push({
-                   id: Date.now() + Math.random(),
-                   speaker: inc.speaker,
-                   start: lastTurn.end + 0.1,
-                   end: lastTurn.end + 2.0,
-                   timestamp: inc.timestamp || lastTurn.timestamp,
-                   text: inc.text,
-                   isFinal: inc.isFinal || false
-                 });
-                 updated = true;
-                 if (inc.isFinal) finalAdded = true;
-              } else {
-                 // Update the ongoing turn
-                 if (inc.speaker && lastTurn.speaker === 'Unknown') lastTurn.speaker = inc.speaker;
-                 if (lastTurn.text !== inc.text) {
-                   lastTurn.text = inc.text;
-                   updated = true;
-                 }
-                 if (inc.isFinal) {
-                   lastTurn.isFinal = true;
-                   updated = true;
-                   finalAdded = true;
-                 }
-              }
-            } else {
-              // Create a new turn
-              nextTurns.push({
-                id: Date.now() + Math.random(),
-                speaker: inc.speaker || 'Unknown',
-                start: lastTurn ? lastTurn.end + 0.1 : 0.0,
-                end: lastTurn ? lastTurn.end + 2.0 : 2.0,
-                timestamp: formatTimestamp(lastTurn ? lastTurn.end + 0.1 : 0.0),
-                text: inc.text,
-                isFinal: inc.isFinal || false
+        // For live transcription, Deepgram might send multiple interleaved chunks in a single message.
+        if (incomingTurns.length > 0 && (incomingTurns[0].language === 'Live' || incomingTurns[0].start === 0.0)) {
+           let firstNonFinalIdx = nextTurns.findIndex(t => !t.isFinal);
+           if (firstNonFinalIdx === -1) firstNonFinalIdx = nextTurns.length;
+           
+           // Remove all existing non-final turns since Deepgram replaces the whole interim utterance
+           const preservedTurns = nextTurns.slice(0, firstNonFinalIdx);
+           const oldNonFinals = nextTurns.slice(firstNonFinalIdx);
+           
+           incomingTurns.forEach((inc, i) => {
+              preservedTurns.push({
+                 id: oldNonFinals[i] ? oldNonFinals[i].id : Date.now() + Math.random(),
+                 speaker: inc.speaker || 'Unknown',
+                 start: inc.start || 0,
+                 end: inc.end || 0,
+                 timestamp: formatTimestamp(inc.start || 0),
+                 text: inc.text,
+                 isFinal: inc.isFinal || false,
+                 language: 'Live'
               });
-              updated = true;
               if (inc.isFinal) finalAdded = true;
-            }
-          } else {
+           });
+           updated = true;
+           nextTurns.length = 0;
+           nextTurns.push(...preservedTurns);
+        } else {
+           incomingTurns.forEach((inc: any) => {
             // Original logic for when proper start/end timestamps are provided
             const existingIdx = nextTurns.findIndex(pt => Math.abs(pt.start - inc.start) < 0.2);
             if (existingIdx >= 0) {
@@ -884,8 +855,8 @@ function ActiveCallView({ currentCase, updateCase, updateCaseId }: { currentCase
                 if (inc.isFinal) finalAdded = true;
               }
             }
-          }
-        });
+          });
+        }
 
         nextTurns.sort((a, b) => a.start - b.start);
 
@@ -940,7 +911,21 @@ function ActiveCallView({ currentCase, updateCase, updateCaseId }: { currentCase
       const next = [...prev];
       if (next[idx]) {
         const s = next[idx].speaker;
-        next[idx].speaker = s === 'Operator' ? 'Caller' : (s === 'Caller' ? 'Operator' : (s === 'OPR' ? 'CALLER' : (s === 'CALLER' ? 'OPR' : (s === 'A' ? 'B' : 'A'))));
+        const newSpeaker = s === 'Operator' ? 'Caller' : (s === 'Caller' ? 'Operator' : (s === 'OPR' ? 'CALLER' : (s === 'CALLER' ? 'OPR' : (s === 'A' ? 'B' : 'A'))));
+        next[idx] = {
+          ...next[idx],
+          speaker: newSpeaker
+        };
+        
+        const newLog = {
+          timestamp: new Date(),
+          type: 'operator',
+          actor: 'OP-01',
+          message: `Swapped speaker label from ${s} to ${newSpeaker} at turn ${idx}`
+        };
+        updateCase(currentCase.id, {
+          auditLog: [...(currentCase.auditLog || []), newLog]
+        });
       }
       return next;
     });
@@ -1363,7 +1348,7 @@ function ActiveCallView({ currentCase, updateCase, updateCaseId }: { currentCase
                          </ul>
                       </div>
                       <div>
-                         <span className="text-[var(--text-secondary)]">Emotional Factors (Contextual):</span>
+                         <span className="text-[var(--text-secondary)]">Emotional Factors:</span>
                          <div className="flex flex-wrap gap-1 mt-1">
                            {analysis.emotionalFactors && analysis.emotionalFactors.length > 0 ? analysis.emotionalFactors.map((ef: string, i: number) => (
                               <span key={i} className="px-1.5 py-0.5 bg-[var(--bg-panel)] border border-[var(--border)] rounded-sm text-[var(--text-primary)]">{ef}</span>
@@ -1498,10 +1483,6 @@ function EvidenceAuditView({ currentCase, updateCase }: { currentCase: any, upda
              <FileText className="w-4 h-4" />
              EXPORT TRANSCRIPT
           </button>
-          <div className="flex items-center gap-2 px-3 py-1 bg-[var(--bg-main)] border border-[var(--border)] text-xs font-mono">
-             <Fingerprint className="w-4 h-4 text-[var(--info-tag)]" />
-             CHAIN OF CUSTODY VERIFIED
-          </div>
         </div>
       </div>
 
@@ -1544,27 +1525,7 @@ function EvidenceAuditView({ currentCase, updateCase }: { currentCase: any, upda
             </div>
           </div>
 
-          <div className="border border-[var(--border)] bg-[var(--bg-main)] p-4 flex flex-col gap-3">
-             <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase flex items-center gap-2">
-              <FileDigit className="w-4 h-4" /> Cryptographic Signatures
-            </h3>
-            
-            <div className="space-y-3 font-mono text-xs">
-              <div>
-                <div className="text-[var(--text-secondary)] mb-1">Audio File SHA-256</div>
-                <div className="p-2 bg-[var(--bg-panel)] border border-[var(--border)] text-[var(--text-primary)] break-all select-all">
-                  {currentCase.fileHash || 'Pending Capture...'}
-                </div>
-              </div>
-              <div>
-                <div className="text-[var(--text-secondary)] mb-1">Transcript Version</div>
-                <div className="p-2 bg-[var(--bg-panel)] border border-[var(--border)] text-[var(--text-primary)]">
-                  {currentCase.status === 'RESOLVED' ? 'v1.0.0-final (Locked)' : 'Live Streaming (Mutable)'}
-                </div>
-              </div>
-              
-            </div>
-          </div>
+          
 
         </div>
 

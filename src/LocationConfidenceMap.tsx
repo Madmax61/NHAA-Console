@@ -22,8 +22,6 @@ export function LocationConfidenceMap({ analysis }: { analysis: any }) {
   
   // demo state
   
-  
-  const [demoState, setDemoState] = useState<LocationConfidence | "auto">("auto");
 
   const getDemoEstimate = (state: LocationConfidence): LocationEstimate => {
     switch(state) {
@@ -89,17 +87,13 @@ export function LocationConfidenceMap({ analysis }: { analysis: any }) {
   };
 
   useEffect(() => {
-    if (demoState !== "auto") {
-      setEstimate(getDemoEstimate(demoState as LocationConfidence));
+    const normalized = normalizeLocationEstimate(analysis);
+    if (normalized) {
+       setEstimate(normalized);
     } else {
-      const normalized = normalizeLocationEstimate(analysis);
-      if (normalized) {
-         setEstimate(normalized);
-      } else {
-         setEstimate(getDemoEstimate("unknown"));
-      }
+       setEstimate(getDemoEstimate("unknown"));
     }
-  }, [analysis, demoState]);
+  }, [analysis]);
 
 
 
@@ -395,23 +389,6 @@ export function LocationConfidenceMap({ analysis }: { analysis: any }) {
                           "Map estimate is derived from caller-provided information and must be verified before dispatch."
                        </div>
                        
-                       {/* Developer Demo Control (as requested) */}
-                       <div className="mt-12 pt-4 border-t border-[var(--border)]">
-                          <div className="text-[9px] text-[var(--text-secondary)] uppercase mb-2">DEMO LOCATION STATE (Local Only)</div>
-                          <select 
-                             className="w-full bg-[var(--bg-panel)] border border-[var(--border)] p-1 text-[10px] font-mono focus:outline-none"
-                             value={demoState}
-                             onChange={(e) => setDemoState(e.target.value as LocationConfidence)}
-                          >
-                             <option value="auto">Auto (Backend)</option>
-                             <option value="unknown">Unknown</option>
-                             <option value="insufficient">Insufficient information</option>
-                             <option value="low">Approximate landmark</option>
-                             <option value="medium">Locality match</option>
-                             <option value="high">Address match</option>
-                             <option value="verified">Operator verified</option>
-                          </select>
-                       </div>
 
                     </div>
                  </div>

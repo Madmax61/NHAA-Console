@@ -17,7 +17,10 @@ app.get('/health', (req, res) => res.json({status: 'ok'}));
 const upload = multer({ dest: 'uploads/' });
 
 // Initialize Gemini
-const geminiApiKey = process.env.GEMINI_KEY || process.env.GEMINI_API_KEY;
+const geminiApiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_KEY;
+if (!geminiApiKey) {
+  throw new Error("GEMINI_API_KEY environment variable is missing");
+}
 const ai = new GoogleGenAI({ 
   apiKey: geminiApiKey, 
   httpOptions: { 
@@ -155,7 +158,7 @@ app.post('/api/analyze', async (req, res) => {
 
     try {
       const response = await generateContentWithFallback({
-        models: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-flash-lite-latest'],
+        models: ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'],
         contents: prompt,
         config: {
           responseMimeType: "application/json"
@@ -217,7 +220,7 @@ app.post('/api/translate', async (req, res) => {
     `;
 
     const response = await generateContentWithFallback({
-      models: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash'],
+      models: ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'],
       contents: prompt,
       config: { responseMimeType: "application/json" }
     });
@@ -265,7 +268,7 @@ app.post('/api/transcribe_file', upload.single('file'), async (req, res) => {
   try {
     filePath = file.path;
 
-    if (process.env.GEMINI_KEY || process.env.GEMINI_API_KEY) {
+    if (process.env.GEMINI_API_KEY) {
       console.log("Transcribing via Gemini (Inline Base64)...");
       
       const fileBuffer = fs.readFileSync(file.path);
@@ -291,7 +294,7 @@ app.post('/api/transcribe_file', upload.single('file'), async (req, res) => {
       try {
         console.log("Requesting transcription from Gemini...");
         response = await generateContentWithFallback({
-          models: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
+          models: ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'],
           contents: { parts: [
             { inlineData: { data: base64Data, mimeType: file.mimetype || 'audio/mpeg' } },
             { text: prompt }
@@ -355,7 +358,7 @@ app.post('/api/transcribe_file', upload.single('file'), async (req, res) => {
       return res.end();
     } else {
       clearInterval(heartbeat);
-      res.write(JSON.stringify({ error: "GEMINI_KEY is not set." }));
+      res.write(JSON.stringify({ error: "GEMINI_API_KEY is not set." }));
       return res.end();
     }
   } catch (error: any) {
@@ -415,12 +418,19 @@ async function startServer() {
     console.log("Client connected to", request.url);
     
     let targetLanguage = 'multi';
+    const langMap: { [key: string]: string } = {
+      'bengali': 'bn',
+      'hindi': 'hi',
+      'marathi': 'mr',
+      'gujarati': 'gu',
+      'punjabi': 'pa'
+    };
     try {
       if (request.url) {
         const url = new URL(request.url, `http://${request.headers.host}`);
         const langParam = url.searchParams.get('language');
         if (langParam && langParam !== 'auto') {
-          targetLanguage = langParam;
+          targetLanguage = langMap[langParam.toLowerCase()] || langParam;
         }
       }
     } catch (e) {
@@ -450,7 +460,7 @@ async function startServer() {
     }
 
     try {
-      let dgUrl = `wss://api.deepgram.com/v1/listen?model=nova-3&language=${targetLanguage}&smart_format=true&diarize=true&interim_results=true&endpointing=300`;
+      let dgUrl = `wss://api.deepgram.com/v1/listen?model=nova-3&language=${targetLanguage}&smart_format=true&diarize_model=latest&interim_results=true&endpointing=300`;
       console.log("Connecting to Deepgram with URL:", dgUrl);
       dgWs = new WebSocket(dgUrl, {
         headers: {
